@@ -1,0 +1,9 @@
+# Generated .NET build output
+**/bin/
+**/obj/
+/dist/
+
+# Local IDE state
+.vs/
+*.user
+*.suo
