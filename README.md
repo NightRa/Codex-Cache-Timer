@@ -2,6 +2,8 @@
 
 A Windows companion for Codex Desktop. It places a small estimated cache timer in the taskbar gap immediately left of the hidden-icons chevron. Codex plugins do not have a supported way to add persistent desktop UI there, so the visible part runs as a C# app.
 
+## Disclaimer - 100% Vibe coded
+
 ## Run
 
 Run the published app:
