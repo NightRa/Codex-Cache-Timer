@@ -16,6 +16,7 @@ internal sealed class SessionsPopupForm : Form
     private IReadOnlyList<CodexSession> sessions = [];
     private TimerSettings settings = new();
     private string? preferredId;
+    private bool closeQueued;
 
     public event Action<string?>? PinRequested;
     public event Action? QuitRequested;
@@ -74,7 +75,18 @@ internal sealed class SessionsPopupForm : Form
         Deactivate += (_, _) =>
         {
             DiagnosticLog.Info("popup-deactivated", $"bounds={Bounds}");
-            Hide();
+            if (closeQueued || !IsHandleCreated) return;
+            closeQueued = true;
+            // Let the click that changed focus reach its target before hiding.
+            BeginInvoke((Action)(() =>
+            {
+                closeQueued = false;
+                if (!IsDisposed && Visible)
+                {
+                    DiagnosticLog.Info("popup-hide-after-deactivate", $"bounds={Bounds}");
+                    Hide();
+                }
+            }));
         };
     }
 
@@ -152,9 +164,11 @@ internal sealed class SessionsPopupForm : Form
         int top = Math.Max(working.Top, working.Bottom - Height - 8);
         Location = new Point(left, top);
         DiagnosticLog.Info("popup-position", $"overlay={overlay.Bounds} working={working} target={Bounds}");
-        if (!Visible) Show(overlay);
-        else BringToFront();
-        Activate();
+        if (!Visible)
+        {
+            Show(overlay);
+            Activate();
+        }
     }
 
     private Panel CreateRow(CodexSession session, DateTimeOffset now)

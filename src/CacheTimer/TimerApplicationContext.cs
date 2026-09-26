@@ -41,6 +41,7 @@ internal sealed class TimerApplicationContext : ApplicationContext
             DiagnosticLog.Warn("overlay-create", $"previousExists={overlay is not null} "
                 + $"previousDisposed={overlay?.IsDisposed} previousHandle={overlay?.IsHandleCreated}");
             overlay = new TaskbarOverlayForm();
+            overlay.SetPopupStateProvider(() => popup is { Visible: true });
             overlay.OpenRequested += (_, _) => { DiagnosticLog.Info("overlay-click"); OpenPopup(); };
             overlay.FormClosed += (_, e) =>
             {
@@ -112,6 +113,11 @@ internal sealed class TimerApplicationContext : ApplicationContext
     private void OpenPopup()
     {
         if (overlay is null || overlay.IsDisposed) return;
+        if (popup is { Visible: true })
+        {
+            DiagnosticLog.Info("popup-stays-open", $"bounds={popup.Bounds}");
+            return;
+        }
         DiagnosticLog.Info("popup-open", $"rows={sessions.Count} preferred={preferredId ?? "none"}");
         if (popup is null || popup.IsDisposed)
         {

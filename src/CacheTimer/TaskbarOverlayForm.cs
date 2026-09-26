@@ -54,6 +54,8 @@ internal sealed class TaskbarOverlayForm : Form
     private const uint SwpNoActivate = 0x0010;
     private const int WsExToolwindow = 0x00000080;
     private const int WsExAppwindow = 0x00040000;
+    private const int WmMouseActivate = 0x0021;
+    private const int MaNoActivate = 3;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeRect { public int Left, Top, Right, Bottom; }
@@ -69,8 +71,10 @@ internal sealed class TaskbarOverlayForm : Form
     private nint taskbarOwner;
     private string lastPositionSource = "";
     private bool reportedMissingTaskbar;
+    private Func<bool>? popupIsOpen;
 
     public event EventHandler? OpenRequested;
+    public void SetPopupStateProvider(Func<bool> provider) => popupIsOpen = provider;
 
     public TaskbarOverlayForm()
     {
@@ -118,6 +122,19 @@ internal sealed class TaskbarOverlayForm : Form
             parameters.ExStyle &= ~WsExAppwindow;
             return parameters;
         }
+    }
+
+    protected override void WndProc(ref Message message)
+    {
+        // Keep the popup active when its taskbar timer is clicked. Windows still
+        // delivers the mouse click, so the timer can handle it without a hide/show.
+        if (message.Msg == WmMouseActivate && popupIsOpen?.Invoke() == true)
+        {
+            message.Result = new nint(MaNoActivate);
+            DiagnosticLog.Info("overlay-click-noactivate");
+            return;
+        }
+        base.WndProc(ref message);
     }
 
     private void OnMouseUp(object? sender, MouseEventArgs e)
