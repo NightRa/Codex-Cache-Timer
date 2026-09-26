@@ -101,6 +101,8 @@ internal static class Program
             rows.AutoScrollPosition = new Point(0, maxScroll);
             Application.DoEvents();
 
+            Check(-rows.AutoScrollPosition.Y == maxScroll,
+                $"Bottom scroll must reach maximum offset (expected={maxScroll}, actual={-rows.AutoScrollPosition.Y}).");
             var pinnedLastRow = rows.Controls[rows.Controls.Count - 1];
             var pinnedFinalButton = pinnedLastRow.Controls.OfType<Button>().Single();
             Check(pinnedFinalButton.BackColor == Color.FromArgb(70, 80, 92),
