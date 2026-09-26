@@ -81,23 +81,22 @@ internal static class Program
         TimerSettings settings, string? preferredId, DateTimeOffset now, bool scrollToBottom = false)
     {
         using var popup = new SessionsPopupForm();
-        // A visible control tree is needed for native scrollbars and DPI layout.
+        // A visible control tree is needed for WinForms layout at the desktop DPI.
         // Keep it offscreen; DrawToBitmap captures the controls, not desktop pixels.
         popup.Location = new Point(-32000, -32000);
         popup.Show();
         popup.SetSessions(sessions, settings, preferredId, now);
         popup.PerformLayout();
         Application.DoEvents();
-        var rows = popup.Controls.OfType<FlowLayoutPanel>().Single();
         if (scrollToBottom)
         {
-            rows.AutoScrollPosition = new Point(0, rows.DisplayRectangle.Height);
+            popup.ScrollListTo(popup.MaximumScroll);
             Application.DoEvents();
         }
         using var bitmap = new Bitmap(popup.ClientSize.Width, popup.ClientSize.Height);
         popup.DrawToBitmap(bitmap, popup.ClientRectangle);
         var path = Path.Combine(output, $"{name}.png");
         bitmap.Save(path, ImageFormat.Png);
-        Console.WriteLine($"{path} ({bitmap.Width}x{bitmap.Height}, DPI={popup.DeviceDpi}, rows={sessions.Count}, scrollY={rows.AutoScrollPosition.Y})");
+        Console.WriteLine($"{path} ({bitmap.Width}x{bitmap.Height}, DPI={popup.DeviceDpi}, rows={sessions.Count}, scrollY={-popup.ScrollOffset})");
     }
 }
