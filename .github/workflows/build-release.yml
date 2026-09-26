@@ -71,7 +71,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          $versionArgs = if ($env:RELEASE_TAG) { @("-p:Version=$($env:RELEASE_TAG.Substring(1))") } else { @() }
+          $versionArgs = @()
+          if ($env:RELEASE_TAG) { $versionArgs += "-p:Version=$($env:RELEASE_TAG.Substring(1))" }
           dotnet publish src/CacheTimer/CacheTimer.csproj --configuration Release --runtime win-x64 --self-contained false --output dist/CodexCacheTimer -p:DebugType=None -p:DebugSymbols=false @versionArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $suffix = if ($env:RELEASE_TAG) { $env:RELEASE_TAG } else { $env:GITHUB_SHA.Substring(0, 7) }
