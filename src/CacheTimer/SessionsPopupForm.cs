@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Drawing;
-using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace CodexCacheTimer;
@@ -12,6 +11,7 @@ internal sealed class SessionsPopupForm : Form
     private const int MaxVisibleRows = 9;
 
     private readonly BufferedFlowLayoutPanel rows;
+    private readonly Panel viewport;
     private readonly PopupScrollBar scrollBar;
     private readonly ToolTip tooltip = new();
     private readonly Dictionary<string, SessionRow> sessionRows = new(StringComparer.OrdinalIgnoreCase);
@@ -20,6 +20,11 @@ internal sealed class SessionsPopupForm : Form
     private TimerSettings settings = new();
     private string? preferredId;
     private bool closeQueued;
+    private int scrollOffset;
+
+    internal FlowLayoutPanel SessionRows => rows;
+    internal int ScrollOffset => scrollOffset;
+    internal int MaximumScroll => Math.Max(0, rows.Height - viewport.ClientSize.Height);
 
     public event Action<string?>? PinRequested;
     public event Action? QuitRequested;
@@ -49,24 +54,29 @@ internal sealed class SessionsPopupForm : Form
         };
         Controls.Add(header);
 
-        rows = new BufferedFlowLayoutPanel
+        viewport = new Panel
         {
             Bounds = new Rectangle(0, 48, 560, 142),
             Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+            BackColor = BackColor,
+        };
+        Controls.Add(viewport);
+        rows = new BufferedFlowLayoutPanel
+        {
+            Bounds = new Rectangle(0, 0, 560, 142),
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
-            AutoScroll = true,
+            AutoScroll = false,
             Padding = new Padding(4, 6, 4, 6),
             BackColor = BackColor,
         };
-        Controls.Add(rows);
-        scrollBar = new PopupScrollBar(rows)
+        viewport.Controls.Add(rows);
+        scrollBar = new PopupScrollBar(this)
         {
             Visible = false,
             Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right,
         };
-        Controls.Add(scrollBar);
-        rows.ClientSizeChanged += (_, _) => ResizeRowsToViewport();
+        viewport.Controls.Add(scrollBar);
         emptyMessage = new Label
         {
             Text = "No Codex tasks active in the last three hours",
@@ -91,6 +101,8 @@ internal sealed class SessionsPopupForm : Form
         footer.Controls.Add(quitButton);
         Controls.Add(footer);
         header.BringToFront();
+        viewport.ClientSizeChanged += (_, _) => ResizeRowsToViewport();
+        rows.WheelScrolled += delta => ScrollListBy(-Math.Sign(delta) * 44 * Math.Max(1, SystemInformation.MouseWheelScrollLines));
 
         Shown += (_, _) => DiagnosticLog.Info("popup-shown", $"bounds={Bounds}");
         VisibleChanged += (_, _) => DiagnosticLog.Info("popup-visible", $"visible={Visible} bounds={Bounds}");
@@ -148,7 +160,7 @@ internal sealed class SessionsPopupForm : Form
         // Leave the control tree (and scroll/focus state) alone on ordinary scans.
         if (!rows.Controls.Cast<Control>().SequenceEqual(desired))
         {
-            var scroll = rows.AutoScrollPosition;
+            int savedOffset = scrollOffset;
             rows.SuspendLayout();
             try
             {
@@ -176,16 +188,9 @@ internal sealed class SessionsPopupForm : Form
             finally
             {
                 rows.ResumeLayout(true);
-                rows.AutoScrollPosition = new Point(-scroll.X, -scroll.Y);
             }
             ResizeRowsToViewport();
-            int scrollContentHeight = sorted.Length > MaxVisibleRows
-                ? rows.Padding.Vertical + sessionRows.Values.Sum(row => row.Height + row.Margin.Vertical)
-                : 0;
-            rows.AutoScrollMinSize = new Size(0, scrollContentHeight);
-            rows.PerformLayout();
-            ResizeRowsToViewport();
-            scrollBar.Sync();
+            ScrollListTo(savedOffset);
         }
     }
 
@@ -221,56 +226,85 @@ internal sealed class SessionsPopupForm : Form
     private sealed class BufferedFlowLayoutPanel : FlowLayoutPanel
     {
         public BufferedFlowLayoutPanel() => DoubleBuffered = true;
+
+        public event Action<int>? WheelScrolled;
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            WheelScrolled?.Invoke(e.Delta);
+            if (e is HandledMouseEventArgs handled) handled.Handled = true;
+        }
     }
 
     private void ResizeRowsToViewport()
     {
-        if (rows.IsDisposed || rows.ClientSize.Width <= 0) return;
-        foreach (var row in sessionRows.Values)
+        if (rows.IsDisposed || viewport.ClientSize.Width <= 0) return;
+        int contentHeight = rows.Padding.Vertical
+            + rows.Controls.Cast<Control>().Sum(control => control.Height + control.Margin.Vertical);
+        bool needsScroll = contentHeight > viewport.ClientSize.Height;
+        int barWidth = (int)Math.Round(17 * DeviceDpi / 96d);
+        rows.SuspendLayout();
+        try
         {
-            int width = Math.Max(1, rows.ClientSize.Width - rows.Padding.Horizontal - row.Margin.Horizontal);
-            row.ResizeForList(width);
+            rows.Size = new Size(Math.Max(1, viewport.ClientSize.Width - (needsScroll ? barWidth : 0)),
+                Math.Max(viewport.ClientSize.Height, contentHeight));
+            foreach (var row in sessionRows.Values)
+                row.ResizeForList(Math.Max(1, rows.ClientSize.Width - rows.Padding.Horizontal - row.Margin.Horizontal));
+            emptyMessage.Width = Math.Max(1,
+                rows.ClientSize.Width - rows.Padding.Horizontal - emptyMessage.Margin.Horizontal);
         }
-        emptyMessage.Width = Math.Max(1,
-            rows.ClientSize.Width - rows.Padding.Horizontal - emptyMessage.Margin.Horizontal);
-        scrollBar.Bounds = new Rectangle(rows.Right - SystemInformation.VerticalScrollBarWidth,
-            rows.Top, SystemInformation.VerticalScrollBarWidth, rows.Height);
+        finally { rows.ResumeLayout(true); }
+        scrollBar.Bounds = new Rectangle(viewport.ClientSize.Width - barWidth, 0, barWidth, viewport.ClientSize.Height);
+        scrollBar.BringToFront();
+        ScrollListTo(scrollOffset);
+    }
+
+    internal void ScrollListTo(int offset)
+    {
+        scrollOffset = Math.Clamp(offset, 0, MaximumScroll);
+        rows.Location = new Point(0, -scrollOffset);
         scrollBar.Sync();
+    }
+
+    internal void ScrollListBy(int amount) => ScrollListTo(scrollOffset + amount);
+
+    protected override bool ProcessCmdKey(ref Message message, Keys keyData)
+    {
+        if (MaximumScroll > 0 && (keyData & Keys.Modifiers) == Keys.None)
+        {
+            switch (keyData)
+            {
+                case Keys.Up: ScrollListBy(-44); return true;
+                case Keys.Down: ScrollListBy(44); return true;
+                case Keys.PageUp: ScrollListBy(-viewport.Height); return true;
+                case Keys.PageDown: ScrollListBy(viewport.Height); return true;
+                case Keys.Home: ScrollListTo(0); return true;
+                case Keys.End: ScrollListTo(MaximumScroll); return true;
+            }
+        }
+        return base.ProcessCmdKey(ref message, keyData);
     }
 
     private sealed class PopupScrollBar : Control
     {
-        private const int SbVert = 1;
-
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool ShowScrollBar(nint hWnd, int bar, bool show);
-
-        private readonly FlowLayoutPanel target;
+        private readonly SessionsPopupForm target;
         private bool hovered;
         private bool dragging;
         private int dragOffset;
 
-        public PopupScrollBar(FlowLayoutPanel target)
+        public PopupScrollBar(SessionsPopupForm target)
         {
             this.target = target;
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint
                 | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             BackColor = Color.FromArgb(30, 33, 38);
             Cursor = Cursors.SizeNS;
-            target.Scroll += (_, _) => Sync();
-            target.Layout += (_, _) => Sync();
-            target.ClientSizeChanged += (_, _) => Sync();
         }
 
         public void Sync()
         {
-            if (target.IsDisposed || !target.IsHandleCreated) return;
-            bool needsScroll = target.VerticalScroll.Visible;
-            // AutoScroll still needs its native range for wheel and keyboard input,
-            // but its OS-drawn scrollbar ignores the popup's dark theme. Keep the
-            // native bar hidden and draw the themed thumb in this sibling control.
-            ShowScrollBar(target.Handle, SbVert, false);
+            if (target.IsDisposed) return;
+            bool needsScroll = target.MaximumScroll > 0;
             if (Visible != needsScroll) Visible = needsScroll;
             Invalidate();
         }
@@ -315,7 +349,7 @@ internal sealed class SessionsPopupForm : Form
             }
             else
             {
-                int page = Math.Max(1, target.ClientSize.Height - Scale(44));
+                int page = Math.Max(1, target.viewport.ClientSize.Height - 44);
                 ScrollBy(e.Y < thumb.Top ? -page : page);
             }
         }
@@ -342,8 +376,8 @@ internal sealed class SessionsPopupForm : Form
 
         protected override void OnMouseWheel(MouseEventArgs e)
         {
-            ScrollBy(-Math.Sign(e.Delta) * Math.Max(1, target.ClientSize.Height / 3));
-            base.OnMouseWheel(e);
+            ScrollBy(-Math.Sign(e.Delta) * 44 * Math.Max(1, SystemInformation.MouseWheelScrollLines));
+            if (e is HandledMouseEventArgs handled) handled.Handled = true;
         }
 
         private Rectangle ThumbBounds()
@@ -351,33 +385,27 @@ internal sealed class SessionsPopupForm : Form
             int trackTop = Scale(8);
             int trackHeight = Math.Max(1, Height - Scale(16));
             int range = ScrollRange();
-            int viewport = Math.Max(1, target.ClientSize.Height);
+            int viewport = Math.Max(1, target.viewport.ClientSize.Height);
             int content = Math.Max(viewport, range + viewport);
             int thumbHeight = Math.Clamp((int)Math.Round(trackHeight * (double)viewport / content),
                 Scale(30), trackHeight);
             int travel = Math.Max(0, trackHeight - thumbHeight);
-            int value = Math.Clamp(target.VerticalScroll.Value, 0, range);
+            int value = target.ScrollOffset;
             int top = trackTop + (range == 0 ? 0 : (int)Math.Round(travel * (double)value / range));
             int width = Scale(7);
             return new Rectangle((Width - width) / 2, top, width, thumbHeight);
         }
 
-        private int ScrollRange() => Math.Max(0,
-            target.VerticalScroll.Maximum - target.VerticalScroll.LargeChange + 1);
+        private int ScrollRange() => target.MaximumScroll;
 
         private void ScrollBy(int amount)
         {
-            SetScrollValue(target.VerticalScroll.Value + amount);
+            SetScrollValue(target.ScrollOffset + amount);
         }
 
         private void SetScrollValue(int value)
         {
-            int range = ScrollRange();
-            int next = Math.Clamp(value, 0, range);
-            if (next == target.VerticalScroll.Value) return;
-            try { target.VerticalScroll.Value = next; }
-            catch (ArgumentOutOfRangeException) { target.AutoScrollPosition = new Point(0, next); }
-            Sync();
+            target.ScrollListTo(value);
         }
 
         private int Scale(int value) => (int)Math.Round(value * DeviceDpi / 96d);

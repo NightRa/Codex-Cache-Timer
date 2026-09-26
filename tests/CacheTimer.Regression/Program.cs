@@ -1,5 +1,7 @@
 using CodexCacheTimer;
 using System.Drawing;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 internal static class Program
@@ -10,13 +12,14 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         try
         {
+            CheckPopupScrolling();
             CheckTitleAlignment();
             using var popup = new SessionsPopupForm();
             var now = new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero);
             var settings = new TimerSettings();
             var session = new CodexSession("task-1", "Example", "model", now, now, false, null);
             popup.SetSessions([session], settings, null, now);
-            var rows = popup.Controls.OfType<FlowLayoutPanel>().Single();
+            var rows = popup.SessionRows;
             var row = rows.Controls[0];
             var handle = row.Handle;
             int removed = 0;
@@ -84,15 +87,15 @@ internal static class Program
             popup.Show();
             popup.SetSessions(many, settings, null, now);
             Application.DoEvents();
-            rows.AutoScrollPosition = new Point(0, 150);
-            var scroll = rows.AutoScrollPosition;
-            Check(scroll.Y < 0, "Scroll regression must exercise a scrolled list.");
+            popup.ScrollListTo(150);
+            var scroll = popup.ScrollOffset;
+            Check(scroll > 0, "Scroll regression must exercise a scrolled list.");
             var retained = rows.Controls.Cast<Control>().ToArray();
             popup.SetSessions(many.Select(item => item with { }).ToArray(), settings, null, now.AddSeconds(4));
-            Check(rows.AutoScrollPosition == scroll && rows.Controls.Cast<Control>().SequenceEqual(retained),
+            Check(popup.ScrollOffset == scroll && rows.Controls.Cast<Control>().SequenceEqual(retained),
                 "Refreshing a scrolled list must preserve its scroll position and rows.");
             popup.SetSessions(many.Append(second).ToArray(), settings, null, now.AddSeconds(8));
-            Check(rows.AutoScrollPosition == scroll && retained.All(control => !control.IsDisposed),
+            Check(popup.ScrollOffset == scroll && retained.All(control => !control.IsDisposed),
                 "Adding a task must preserve scroll position and existing rows.");
             Console.WriteLine("PASS: scrolled lists retain their position during scans and additions.");
             return 0;
@@ -102,6 +105,92 @@ internal static class Program
             Console.Error.WriteLine($"FAIL: {error.Message}");
             return 1;
         }
+    }
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern nint GetWindowLongPtr(nint window, int index);
+
+    [DllImport("user32.dll", EntryPoint = "SendMessageW")]
+    private static extern nint SendMessage(nint window, uint message, nint wParam, nint lParam);
+
+    private static void CheckPopupScrolling()
+    {
+        using var popup = new SessionsPopupForm();
+        var now = new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero);
+        var settings = new TimerSettings();
+        var many = Enumerable.Range(0, 20).Select(index => new CodexSession(
+            $"scroll-{index}", $"Scroll task {index}", "model", now.AddMinutes(index),
+            now, false, null)).ToArray();
+        popup.Location = new Point(-32000, -32000);
+        popup.Show();
+        popup.SetSessions(many, settings, many[^1].Id, now);
+        Application.DoEvents();
+        var rows = (FlowLayoutPanel)typeof(SessionsPopupForm)
+            .GetField("rows", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(popup)!;
+        var bar = (Control)typeof(SessionsPopupForm)
+            .GetField("scrollBar", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(popup)!;
+        Check(bar.Visible, "Overflow must keep the dark scrollbar visible.");
+        int previousTop = rows.Controls[0].Top + rows.Top;
+        var wheel = bar.GetType().GetMethod("OnMouseWheel", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        for (int step = 0; step < 3; step++)
+        {
+            wheel.Invoke(bar, [new MouseEventArgs(MouseButtons.None, 0, 5, 5, -120)]);
+            Application.DoEvents();
+            int top = rows.Controls[0].Top + rows.Top;
+            Check(top < previousTop, $"Wheel step {step} must advance the list (before={previousTop}, after={top}).");
+            previousTop = top;
+            Check(bar.Visible, "Scrolling must not hide the dark scrollbar.");
+            Check((GetWindowLongPtr(rows.Handle, -16).ToInt64() & 0x00300000) == 0,
+                "Scrolling must not create native horizontal or vertical scrollbars.");
+            popup.SetSessions(many.Select(session => session with { }).ToArray(), settings, many[^1].Id, now);
+            Application.DoEvents();
+            Check(rows.Controls[0].Top + rows.Top == top, "A scan must not snap the list back after a wheel step.");
+        }
+        Console.WriteLine("PASS: wheel scrolling advances without native bars, hiding the theme or snapping back.");
+        foreach (Control surface in new Control[] { rows, rows.Controls[0],
+            rows.Controls[0].Controls.OfType<Label>().First(),
+            rows.Controls[0].Controls.OfType<Button>().Single() })
+        {
+            popup.ScrollListTo(0);
+            SendMessage(surface.Handle, 0x020A, new nint(-120 << 16), 0);
+            Application.DoEvents();
+            int expected = 44 * Math.Max(1, SystemInformation.MouseWheelScrollLines);
+            Check(popup.ScrollOffset == expected,
+                $"Wheel messages over {surface.GetType().Name} must scroll exactly once (offset={popup.ScrollOffset}, expected={expected}).");
+        }
+        Console.WriteLine("PASS: native wheel messages over the list, row, label and pin button scroll exactly once.");
+        var thumb = (Rectangle)bar.GetType().GetMethod("ThumbBounds", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(bar, null)!;
+        void Mouse(string method, int x, int y) => bar.GetType()
+            .GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(bar, [new MouseEventArgs(MouseButtons.Left, 1, x, y, 0)]);
+        Mouse("OnMouseDown", thumb.Left + thumb.Width / 2, thumb.Top + thumb.Height / 2);
+        Mouse("OnMouseMove", thumb.Left + thumb.Width / 2, bar.Height - 1);
+        Mouse("OnMouseUp", thumb.Left + thumb.Width / 2, bar.Height - 1);
+        Application.DoEvents();
+        Check(popup.ScrollOffset == popup.MaximumScroll, "Dragging the dark thumb to the bottom must reach the maximum offset.");
+        var last = rows.Controls[^1];
+        Check(last.Top + rows.Top >= 0 && last.Bottom + rows.Top <= rows.Parent!.ClientSize.Height,
+            "The pinned final row must fit completely in the viewport at maximum scroll.");
+        int bottomOffset = popup.ScrollOffset;
+        wheel.Invoke(bar, [new MouseEventArgs(MouseButtons.None, 0, 5, 5, 120)]);
+        Application.DoEvents();
+        Check(popup.ScrollOffset < bottomOffset && bar.Visible, "Reverse wheel scrolling must move away from the bottom and keep the dark scrollbar.");
+        Mouse("OnMouseDown", 1, 0);
+        Mouse("OnMouseUp", 1, 0);
+        Check(popup.ScrollOffset == 0, "Clicking the track above the thumb must page toward the top.");
+        var key = typeof(SessionsPopupForm).GetMethod("ProcessCmdKey", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        key.Invoke(popup, [new Message(), Keys.End]);
+        Check(popup.ScrollOffset == popup.MaximumScroll, "End must reach the bottom.");
+        key.Invoke(popup, [new Message(), Keys.Home]);
+        Check(popup.ScrollOffset == 0, "Home must reach the top.");
+        key.Invoke(popup, [new Message(), Keys.PageDown]);
+        Check(popup.ScrollOffset == rows.Parent!.ClientSize.Height, "PageDown must advance one viewport.");
+        key.Invoke(popup, [new Message(), Keys.PageUp]);
+        Check(popup.ScrollOffset == 0, "PageUp must return to the top.");
+        popup.SetSessions([many[0]], settings, null, now);
+        Check(!bar.Visible && popup.ScrollOffset == 0, "A short list must hide the dark scrollbar and reset the offset.");
+        Console.WriteLine("PASS: thumb drag, track paging, keyboard input and pinned final-row visibility.");
     }
 
     private static void Check(bool condition, string message)
@@ -115,7 +204,7 @@ internal static class Program
         var now = new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero);
         var session = new CodexSession("alignment", "Example", "model", now, now, false, null);
         popup.SetSessions([session], new TimerSettings(), null, now);
-        var rows = popup.Controls.OfType<FlowLayoutPanel>().Single();
+        var rows = popup.SessionRows;
         var row = rows.Controls[0];
         var title = row.Controls.OfType<Label>().Single(label => label.Name == "SessionTitle");
         var shortBounds = TitleInkBounds(title);
