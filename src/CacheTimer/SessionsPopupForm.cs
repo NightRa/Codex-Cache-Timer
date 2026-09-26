@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace CodexCacheTimer;
@@ -239,6 +240,12 @@ internal sealed class SessionsPopupForm : Form
 
     private sealed class PopupScrollBar : Control
     {
+        private const int SbVert = 1;
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ShowScrollBar(nint hWnd, int bar, bool show);
+
         private readonly FlowLayoutPanel target;
         private bool hovered;
         private bool dragging;
@@ -260,6 +267,10 @@ internal sealed class SessionsPopupForm : Form
         {
             if (target.IsDisposed || !target.IsHandleCreated) return;
             bool needsScroll = target.VerticalScroll.Visible;
+            // AutoScroll still needs its native range for wheel and keyboard input,
+            // but its OS-drawn scrollbar ignores the popup's dark theme. Keep the
+            // native bar hidden and draw the themed thumb in this sibling control.
+            ShowScrollBar(target.Handle, SbVert, false);
             if (Visible != needsScroll) Visible = needsScroll;
             Invalidate();
         }
