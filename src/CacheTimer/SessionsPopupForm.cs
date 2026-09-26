@@ -203,9 +203,23 @@ internal sealed class SessionsPopupForm : Form
         public BufferedFlowLayoutPanel() => DoubleBuffered = true;
     }
 
-    private sealed class BufferedLabel : Label
+    private sealed class SingleLineLabel : Label
     {
-        public BufferedLabel() => DoubleBuffered = true;
+        public SingleLineLabel() => DoubleBuffered = true;
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            // Label's default word wrapping can center a clipped multi-line block,
+            // shifting long titles upward even when AutoEllipsis is enabled.
+            int verticalShift = (int)Math.Round(Font.Height / 9d);
+            var textBounds = ClientRectangle;
+            textBounds.Y -= verticalShift;
+            var flags = TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter
+                | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+            if (AutoEllipsis) flags |= TextFormatFlags.EndEllipsis;
+            if (TextAlign == ContentAlignment.MiddleRight) flags |= TextFormatFlags.Right;
+            TextRenderer.DrawText(e.Graphics, Text, Font, textBounds, ForeColor, flags);
+        }
     }
 
     private sealed class SessionRow : Panel
@@ -226,8 +240,9 @@ internal sealed class SessionsPopupForm : Form
             Margin = new Padding(2, 1, 2, 1);
             BackColor = Color.FromArgb(39, 42, 47);
             Cursor = Cursors.Hand;
-            title = new BufferedLabel
+            title = new SingleLineLabel
             {
+                Name = "SessionTitle",
                 ForeColor = Color.WhiteSmoke,
                 Font = new Font("Segoe UI", 9f),
                 TextAlign = ContentAlignment.MiddleLeft,
@@ -235,8 +250,9 @@ internal sealed class SessionsPopupForm : Form
                 Bounds = new Rectangle(38, 0, 300, 42),
                 Cursor = Cursors.Hand,
             };
-            time = new BufferedLabel
+            time = new SingleLineLabel
             {
+                Name = "SessionTime",
                 ForeColor = Color.Gainsboro,
                 Font = new Font("Segoe UI", 8.5f),
                 TextAlign = ContentAlignment.MiddleRight,
@@ -271,12 +287,16 @@ internal sealed class SessionsPopupForm : Form
                 tooltip.SetToolTip(title, session.Title);
             }
             var text = TimerState.TimeText(session, settings, now);
-            if (time.Text != text) time.Text = text;
+            if (time.Text != text)
+            {
+                time.Text = text;
+                FitTimeLabel();
+            }
             var color = TimerState.Color(session, settings, now);
             if (statusColor != color)
             {
                 statusColor = color;
-                Invalidate(new Rectangle(15, 13, 10, 10));
+                Invalidate(new Rectangle(15, (Height - 10) / 2 - 2, 10, 10));
             }
             bool isPinned = string.Equals(session.Id, preferredId, StringComparison.OrdinalIgnoreCase);
             if (pinned != isPinned)
@@ -291,7 +311,24 @@ internal sealed class SessionsPopupForm : Form
         {
             base.OnPaint(e);
             using var brush = new SolidBrush(statusColor);
-            e.Graphics.FillEllipse(brush, 15, 13, 10, 10);
+            const int dotSize = 10;
+            // GDI's visible letter ink sits slightly above its line-box center.
+            e.Graphics.FillEllipse(brush, 15, (Height - dotSize) / 2 - 2, dotSize, dotSize);
+        }
+
+        private void FitTimeLabel()
+        {
+            const int titleLeft = 38;
+            const int minimumTitleWidth = 96;
+            const int trailingGap = 2;
+            int timeRight = pin.Left - trailingGap;
+            int textWidth = TextRenderer.MeasureText(time.Text, time.Font,
+                Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding).Width;
+            int maximumTimeWidth = Math.Max(148, timeRight - titleLeft - minimumTitleWidth);
+            int timeWidth = Math.Clamp(Math.Max(148, textWidth + 8), 148, maximumTimeWidth);
+            int timeLeft = timeRight - timeWidth;
+            time.Bounds = new Rectangle(timeLeft, 0, timeWidth, Height);
+            title.Width = Math.Max(minimumTitleWidth, timeLeft - titleLeft);
         }
     }
 

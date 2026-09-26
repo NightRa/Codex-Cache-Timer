@@ -41,6 +41,6 @@ Run the popup regression checks on Windows:
 dotnet run --project .\tests\CacheTimer.Regression\CacheTimer.Regression.csproj
 ```
 
-The checks exercise actual WinForms controls: row and handle retention across scans, live status updates, sorting, task additions/removals, empty lists, and scroll preservation. The scroll check briefly shows the test popup offscreen.
+The checks exercise actual WinForms controls: rendered title alignment across short and ellipsized text, long time-label fit, row and handle retention across scans, live status updates, sorting, task additions/removals, empty lists, and scroll preservation. The scroll check briefly shows the test popup offscreen.
 
 Design decisions and the Q1–Q35 record are in [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md).

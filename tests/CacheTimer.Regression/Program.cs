@@ -10,6 +10,7 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         try
         {
+            CheckTitleAlignment();
             using var popup = new SessionsPopupForm();
             var now = new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero);
             var settings = new TimerSettings();
@@ -28,8 +29,8 @@ internal static class Program
                 $"Unchanged scans must retain row controls and handles (removed={removed}).");
             Console.WriteLine("PASS: repeated scans retain existing popup rows and handles.");
 
-            var title = row.Controls.OfType<Label>().Single(label => label.Left == 38);
-            var time = row.Controls.OfType<Label>().Single(label => label.Left == 338);
+            var title = row.Controls.OfType<Label>().Single(label => label.Name == "SessionTitle");
+            var time = row.Controls.OfType<Label>().Single(label => label.Name == "SessionTime");
             var pin = row.Controls.OfType<Button>().Single();
             int textChanges = 0;
             time.TextChanged += (_, _) => textChanges++;
@@ -108,10 +109,61 @@ internal static class Program
         if (!condition) throw new InvalidOperationException(message);
     }
 
+    private static void CheckTitleAlignment()
+    {
+        using var popup = new SessionsPopupForm();
+        var now = new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero);
+        var session = new CodexSession("alignment", "Example", "model", now, now, false, null);
+        popup.SetSessions([session], new TimerSettings(), null, now);
+        var rows = popup.Controls.OfType<FlowLayoutPanel>().Single();
+        var row = rows.Controls[0];
+        var title = row.Controls.OfType<Label>().Single(label => label.Name == "SessionTitle");
+        var shortBounds = TitleInkBounds(title);
+        int dotCenter = row.Height / 2 - 2;
+        Check(Math.Abs((shortBounds.Top + shortBounds.Bottom) / 2d - dotCenter) <= 2,
+            $"Title ink must align with the status dot (title={shortBounds}, dotCenter={dotCenter}, fontHeight={title.Font.Height}, dpi={title.DeviceDpi}).");
+        var longTitle = "Example uncommitted changes";
+        // Ensure truncation is exercised at any display DPI, including 100% scaling.
+        while (TextRenderer.MeasureText(longTitle, title.Font).Width <= title.Width)
+            longTitle += " changes";
+        popup.SetSessions([session with { Title = longTitle }], new TimerSettings(), null, now);
+        var longBounds = TitleInkBounds(title);
+        Check(shortBounds == longBounds,
+            $"Short and ellipsized titles must share vertical ink bounds (short={shortBounds}, long={longBounds}).");
+        var cold = session with { Anchor = now.AddMinutes(-90) };
+        popup.SetSessions([cold], new TimerSettings(), null, now);
+        var time = row.Controls.OfType<Label>().Single(label => label.Name == "SessionTime");
+        int timeWidth = TextRenderer.MeasureText(time.Text, time.Font,
+            Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding).Width;
+        Check(timeWidth <= time.ClientSize.Width,
+            $"Cold time label must fit without clipping (textWidth={timeWidth}, labelWidth={time.ClientSize.Width}, text={time.Text}).");
+        Console.WriteLine("PASS: short and ellipsized popup titles share vertical alignment.");
+    }
+
+    private static (int Top, int Bottom) TitleInkBounds(Label title)
+    {
+        using var bitmap = new Bitmap(title.Width, title.Height);
+        title.DrawToBitmap(bitmap, title.ClientRectangle);
+        int top = title.Height, bottom = -1;
+        // Inspect only the shared 'Example' prefix so different glyphs cannot affect the result.
+        int prefixWidth = TextRenderer.MeasureText("Example", title.Font,
+            Size.Empty, TextFormatFlags.NoPadding).Width;
+        for (int y = 0; y < bitmap.Height; y++)
+        for (int x = 0; x < prefixWidth; x++)
+        {
+            var pixel = bitmap.GetPixel(x, y);
+            if (pixel.R < 150 || pixel.G < 150 || pixel.B < 150) continue;
+            top = Math.Min(top, y);
+            bottom = Math.Max(bottom, y);
+        }
+        Check(bottom >= top, "Title alignment check must capture rendered text.");
+        return (top, bottom);
+    }
+
     private static int DotColor(Control row)
     {
         using var bitmap = new Bitmap(row.Width, row.Height);
         row.DrawToBitmap(bitmap, row.ClientRectangle);
-        return bitmap.GetPixel(20, 18).ToArgb();
+        return bitmap.GetPixel(20, row.Height / 2).ToArgb();
     }
 }
