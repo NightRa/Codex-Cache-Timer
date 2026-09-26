@@ -87,3 +87,9 @@ The question wording below is condensed for readability. The answer and decision
 - An ordinary topmost window sometimes fell behind Explorer's taskbar during focus changes. Polling `SetWindowPos(HWND_TOPMOST)` brought it back but caused visible flicker. The user observed this directly.
 - Making the overlay **owned by the taskbar window** eliminated the observed focus-switching flicker on the user's desktop. Other topmost windows can still cover it temporarily; see [TASKBAR_RESEARCH.md](TASKBAR_RESEARCH.md).
 - The app applies `WS_EX_TOOLWINDOW` and removes `WS_EX_APPWINDOW`; Microsoft documents that tool windows are excluded from Alt+Tab. The user confirmed the overlay remains visible and clickable while being absent from Alt+Tab.
+
+## Popup refresh findings (2026-09-26)
+
+- Each four-second session scan previously disposed and recreated every popup row, even with identical data. This introduced row flicker and discarded interaction state. Rows now stay attached by session ID; only new or removed tasks change the control collection, and changed deadlines reorder existing controls. Scroll position is preserved during these layout changes.
+- Row panels and countdown labels use double buffering. Text, pin styling, and status dots update only when their values change. Status dots also refresh on clock ticks, rather than keeping the color captured at row creation.
+- The Windows regression executable in `tests/CacheTimer.Regression` first reproduced row replacement on 25 identical scans, then verified retained controls/handles and live rendering after the fix.

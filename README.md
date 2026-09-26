@@ -35,4 +35,12 @@ dotnet publish .\src\CacheTimer\CacheTimer.csproj -c Release -o .\dist\CodexCach
 
 The current app targets `net10.0-windows` and uses WinForms and Windows UI Automation. The taskbar-owned overlay and Alt+Tab-hidden window style were tested on the user's Windows desktop. Windows does not provide a documented slot in this exact taskbar gap, so other topmost surfaces can temporarily cover the timer. The app detects Explorer-only occlusion and attempts to restore its Z order; it does not raise itself over capture tools such as Snipping Tool. See [TASKBAR_RESEARCH.md](TASKBAR_RESEARCH.md). Multiple monitors, auto-hidden taskbars, and Explorer restarts need further live validation.
 
+Run the popup regression checks on Windows:
+
+```powershell
+dotnet run --project .\tests\CacheTimer.Regression\CacheTimer.Regression.csproj
+```
+
+The checks exercise actual WinForms controls: row and handle retention across scans, live status updates, sorting, task additions/removals, empty lists, and scroll preservation. The scroll check briefly shows the test popup offscreen.
+
 Design decisions and the Q1–Q35 record are in [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md).

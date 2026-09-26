@@ -11,8 +11,8 @@ internal sealed class SessionsPopupForm : Form
 
     private readonly FlowLayoutPanel rows;
     private readonly ToolTip tooltip = new();
-    private readonly Dictionary<string, Label> times = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, Button> pins = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SessionRow> sessionRows = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Label emptyMessage;
     private IReadOnlyList<CodexSession> sessions = [];
     private TimerSettings settings = new();
     private string? preferredId;
@@ -30,6 +30,7 @@ internal sealed class SessionsPopupForm : Form
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
         BackColor = Color.FromArgb(30, 33, 38);
+        DoubleBuffered = true;
         ForeColor = Color.WhiteSmoke;
         ClientSize = new Size(560, 246);
 
@@ -44,7 +45,7 @@ internal sealed class SessionsPopupForm : Form
         };
         Controls.Add(header);
 
-        rows = new FlowLayoutPanel
+        rows = new BufferedFlowLayoutPanel
         {
             Bounds = new Rectangle(0, 48, 560, 142),
             Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
@@ -55,6 +56,15 @@ internal sealed class SessionsPopupForm : Form
             BackColor = BackColor,
         };
         Controls.Add(rows);
+        emptyMessage = new Label
+        {
+            Text = "No Codex tasks active in the last three hours",
+            ForeColor = Color.LightGray,
+            Font = new Font("Segoe UI", 9f),
+            Width = 540,
+            Height = 42,
+            TextAlign = ContentAlignment.MiddleCenter,
+        };
 
         var footer = new Panel
         {
@@ -107,48 +117,65 @@ internal sealed class SessionsPopupForm : Form
         this.sessions = sessions;
         this.settings = settings;
         this.preferredId = preferredId;
-        times.Clear();
-        pins.Clear();
-        rows.SuspendLayout();
-        foreach (Control control in rows.Controls.Cast<Control>().ToArray()) control.Dispose();
-        rows.Controls.Clear();
-
         var sorted = sessions.OrderBy(s => TimerState.Deadline(s, settings))
             .ThenBy(s => s.Id, StringComparer.Ordinal).ToArray();
-        if (sorted.Length == 0)
+        var desired = new List<Control>();
+        foreach (var session in sorted)
         {
-            rows.Controls.Add(new Label
+            if (!sessionRows.TryGetValue(session.Id, out var row))
             {
-                Text = "No Codex tasks active in the last three hours",
-                ForeColor = Color.LightGray,
-                Font = new Font("Segoe UI", 9f),
-                Width = 540,
-                Height = 42,
-                TextAlign = ContentAlignment.MiddleCenter,
-            });
+                row = new SessionRow(session.Id, tooltip,
+                    id => PinRequested?.Invoke(id == this.preferredId ? null : id));
+                sessionRows.Add(session.Id, row);
+            }
+            row.Update(session, settings, preferredId, now);
+            desired.Add(row);
         }
-        else
-        {
-            foreach (var session in sorted) rows.Controls.Add(CreateRow(session, now));
-        }
-        rows.ResumeLayout();
+        if (desired.Count == 0) desired.Add(emptyMessage);
 
-        int visibleRows = Math.Clamp(sorted.Length, 1, 9);
-        ClientSize = new Size(560, 48 + 56 + visibleRows * 44 + 12);
-        DiagnosticLog.Info("popup-layout", $"rows={sorted.Length} visibleRows={visibleRows} "
-            + $"client={ClientSize} rowPanel={rows.Bounds} footerTop={ClientSize.Height - 56}");
+        // Leave the control tree (and scroll/focus state) alone on ordinary scans.
+        if (!rows.Controls.Cast<Control>().SequenceEqual(desired))
+        {
+            var scroll = rows.AutoScrollPosition;
+            rows.SuspendLayout();
+            try
+            {
+                var retainedIds = sorted.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var id in sessionRows.Keys.Where(id => !retainedIds.Contains(id)).ToArray())
+                {
+                    var row = sessionRows[id];
+                    rows.Controls.Remove(row);
+                    row.Dispose();
+                    sessionRows.Remove(id);
+                }
+                if (sorted.Length > 0) rows.Controls.Remove(emptyMessage);
+                for (int index = 0; index < desired.Count; index++)
+                {
+                    var control = desired[index];
+                    if (control.Parent != rows) rows.Controls.Add(control);
+                    if (rows.Controls.GetChildIndex(control) != index)
+                        rows.Controls.SetChildIndex(control, index);
+                }
+                int visibleRows = Math.Clamp(sorted.Length, 1, 9);
+                ClientSize = new Size(560, 48 + 56 + visibleRows * 44 + 12);
+                DiagnosticLog.Info("popup-layout", $"rows={sorted.Length} visibleRows={visibleRows} "
+                    + $"client={ClientSize} rowPanel={rows.Bounds} footerTop={ClientSize.Height - 56}");
+            }
+            finally
+            {
+                rows.ResumeLayout(true);
+                rows.AutoScrollPosition = new Point(-scroll.X, -scroll.Y);
+            }
+        }
     }
 
     public void RefreshTimes(DateTimeOffset now)
     {
         foreach (var session in sessions)
         {
-            if (times.TryGetValue(session.Id, out var label))
-                label.Text = TimerState.TimeText(session, settings, now);
+            if (sessionRows.TryGetValue(session.Id, out var row))
+                row.Update(session, settings, preferredId, now);
         }
-        foreach (var (id, pin) in pins)
-            pin.BackColor = id == preferredId ? Color.FromArgb(70, 80, 92)
-                : Color.FromArgb(39, 42, 47);
     }
 
     public void SetPreferred(string? id)
@@ -171,65 +198,101 @@ internal sealed class SessionsPopupForm : Form
         }
     }
 
-    private Panel CreateRow(CodexSession session, DateTimeOffset now)
+    private sealed class BufferedFlowLayoutPanel : FlowLayoutPanel
     {
-        var panel = new Panel
+        public BufferedFlowLayoutPanel() => DoubleBuffered = true;
+    }
+
+    private sealed class BufferedLabel : Label
+    {
+        public BufferedLabel() => DoubleBuffered = true;
+    }
+
+    private sealed class SessionRow : Panel
+    {
+        private readonly Label title;
+        private readonly Label time;
+        private readonly Button pin;
+        private readonly ToolTip tooltip;
+        private Color statusColor;
+        private bool? pinned;
+
+        public SessionRow(string id, ToolTip tooltip, Action<string> pinRequested)
         {
-            Width = 544,
-            Height = 42,
-            Margin = new Padding(2, 1, 2, 1),
-            BackColor = Color.FromArgb(39, 42, 47),
-            Cursor = Cursors.Hand,
-        };
-        var statusColor = TimerState.Color(session, settings, now);
-        panel.Paint += (_, args) =>
+            this.tooltip = tooltip;
+            DoubleBuffered = true;
+            Width = 544;
+            Height = 42;
+            Margin = new Padding(2, 1, 2, 1);
+            BackColor = Color.FromArgb(39, 42, 47);
+            Cursor = Cursors.Hand;
+            title = new BufferedLabel
+            {
+                ForeColor = Color.WhiteSmoke,
+                Font = new Font("Segoe UI", 9f),
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true,
+                Bounds = new Rectangle(38, 0, 300, 42),
+                Cursor = Cursors.Hand,
+            };
+            time = new BufferedLabel
+            {
+                ForeColor = Color.Gainsboro,
+                Font = new Font("Segoe UI", 8.5f),
+                TextAlign = ContentAlignment.MiddleRight,
+                Bounds = new Rectangle(338, 0, 148, 42),
+                Cursor = Cursors.Hand,
+            };
+            pin = new Button
+            {
+                Text = "📌",
+                Font = new Font("Segoe UI Emoji", 9f),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Bounds = new Rectangle(488, 0, 48, 42),
+                Cursor = Cursors.Hand,
+                BackColor = BackColor,
+            };
+            pin.FlatAppearance.BorderSize = 0;
+            pin.Click += (_, _) => pinRequested(id);
+            Click += (_, _) => OpenTask(id);
+            title.Click += (_, _) => OpenTask(id);
+            time.Click += (_, _) => OpenTask(id);
+            Controls.Add(title);
+            Controls.Add(time);
+            Controls.Add(pin);
+        }
+
+        public void Update(CodexSession session, TimerSettings settings, string? preferredId, DateTimeOffset now)
         {
+            if (title.Text != session.Title)
+            {
+                title.Text = session.Title;
+                tooltip.SetToolTip(title, session.Title);
+            }
+            var text = TimerState.TimeText(session, settings, now);
+            if (time.Text != text) time.Text = text;
+            var color = TimerState.Color(session, settings, now);
+            if (statusColor != color)
+            {
+                statusColor = color;
+                Invalidate(new Rectangle(15, 13, 10, 10));
+            }
+            bool isPinned = string.Equals(session.Id, preferredId, StringComparison.OrdinalIgnoreCase);
+            if (pinned != isPinned)
+            {
+                pinned = isPinned;
+                pin.BackColor = isPinned ? Color.FromArgb(70, 80, 92) : BackColor;
+                tooltip.SetToolTip(pin, isPinned ? "Unpin preferred task" : "Pin preferred task");
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
             using var brush = new SolidBrush(statusColor);
-            args.Graphics.FillEllipse(brush, 15, 13, 10, 10);
-        };
-        var title = new Label
-        {
-            Text = session.Title,
-            ForeColor = Color.WhiteSmoke,
-            Font = new Font("Segoe UI", 9f),
-            TextAlign = ContentAlignment.MiddleLeft,
-            AutoEllipsis = true,
-            Bounds = new Rectangle(38, 0, 300, 42),
-            Cursor = Cursors.Hand,
-        };
-        var time = new Label
-        {
-            Text = TimerState.TimeText(session, settings, now),
-            ForeColor = Color.Gainsboro,
-            Font = new Font("Segoe UI", 8.5f),
-            TextAlign = ContentAlignment.MiddleRight,
-            Bounds = new Rectangle(338, 0, 148, 42),
-            Cursor = Cursors.Hand,
-        };
-        var pin = new Button
-        {
-            Text = "📌",
-            Font = new Font("Segoe UI Emoji", 9f),
-            ForeColor = Color.White,
-            FlatStyle = FlatStyle.Flat,
-            Bounds = new Rectangle(488, 0, 48, 42),
-            Cursor = Cursors.Hand,
-            BackColor = session.Id == preferredId ? Color.FromArgb(70, 80, 92)
-                : Color.FromArgb(39, 42, 47),
-        };
-        pin.FlatAppearance.BorderSize = 0;
-        pin.Click += (_, _) => PinRequested?.Invoke(session.Id == preferredId ? null : session.Id);
-        tooltip.SetToolTip(pin, session.Id == preferredId ? "Unpin preferred task" : "Pin preferred task");
-        tooltip.SetToolTip(title, session.Title);
-        panel.Click += (_, _) => OpenTask(session.Id);
-        title.Click += (_, _) => OpenTask(session.Id);
-        time.Click += (_, _) => OpenTask(session.Id);
-        panel.Controls.Add(title);
-        panel.Controls.Add(time);
-        panel.Controls.Add(pin);
-        times[session.Id] = time;
-        pins[session.Id] = pin;
-        return panel;
+            e.Graphics.FillEllipse(brush, 15, 13, 10, 10);
+        }
     }
 
     private static Button FooterButton(string text, int x, int width)
@@ -265,7 +328,11 @@ internal sealed class SessionsPopupForm : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) tooltip.Dispose();
+        if (disposing)
+        {
+            tooltip.Dispose();
+            emptyMessage.Dispose();
+        }
         base.Dispose(disposing);
     }
 }
