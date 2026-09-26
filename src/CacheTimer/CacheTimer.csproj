@@ -7,5 +7,6 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>CodexCacheTimer</AssemblyName>
+    <ApplicationIcon>Assets\CacheTimer.ico</ApplicationIcon>
   </PropertyGroup>
 </Project>
