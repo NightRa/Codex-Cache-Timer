@@ -22,6 +22,7 @@ internal sealed class TimerApplicationContext : ApplicationContext
 
     public TimerApplicationContext()
     {
+        preferredId = settings.PreferredSessionId;
         DiagnosticLog.Info("context-created", $"recentHours={settings.RecentHours} log={DiagnosticLog.CurrentPath}");
         EnsureOverlay();
         RefreshSessions();
@@ -61,6 +62,12 @@ internal sealed class TimerApplicationContext : ApplicationContext
         try
         {
             sessions = reader.ReadRecent(TimeSpan.FromHours(settings.RecentHours));
+            if (preferredId is not null
+                && !sessions.Any(session => string.Equals(session.Id, preferredId, StringComparison.OrdinalIgnoreCase)))
+            {
+                DiagnosticLog.Info("pin-expired", $"id={preferredId} recentHours={settings.RecentHours}");
+                SetPreferred(null);
+            }
             DiagnosticLog.Info("scan", $"elapsedMs={watch.ElapsedMilliseconds} count={sessions.Count} "
                 + string.Join(";", sessions.Select(s => $"id={s.Id},model={s.Model},running={s.Running},"
                     + $"anchor={s.Anchor:O},last={s.LastActivity:O},titled={s.Title != "Untitled"}")));
@@ -125,7 +132,7 @@ internal sealed class TimerApplicationContext : ApplicationContext
             popup.PinRequested += id =>
             {
                 DiagnosticLog.Info("pin-changed", $"old={preferredId ?? "none"} new={id ?? "none"}");
-                preferredId = id;
+                SetPreferred(id);
                 popup.SetPreferred(id);
                 UpdateClock();
             };
@@ -133,6 +140,20 @@ internal sealed class TimerApplicationContext : ApplicationContext
         }
         popup.SetSessions(sessions, settings, preferredId, DateTimeOffset.Now);
         popup.ShowAbove(overlay);
+    }
+
+    private void SetPreferred(string? id)
+    {
+        preferredId = id;
+        settings.PreferredSessionId = id;
+        try
+        {
+            settings.Save();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            DiagnosticLog.Error("settings-save-failed", error);
+        }
     }
 
     private void Quit()

@@ -73,7 +73,7 @@ The question wording below is condensed for readability. The answer and decision
 | Q26 | What does clicking a popup row do? | Pin icon on right selects preference. Opening the Codex task on row click is nice-to-have. Show all recent sessions, including preferred, sorted by anchor/deadline. |
 | Q27 | Color thresholds? | Green above 10 minutes; amber 5–10; red below 5; blue running; gray cold. |
 | Q28 | Title before Codex names a new task? | Temporarily `Untitled`. |
-| Q29 | Persist preferred task and settings? | Persist settings only; auto-select a task each startup. |
+| Q29 | Persist preferred task and settings? | Initially: persist settings only; auto-select a task each startup. Superseded on 2026-09-26: persist the preferred task ID, restore it on launch, and clear it from settings once it falls outside the configured recent window. |
 | Q30 | Does the overlay sit fully in the marked taskbar gap without covering controls? | The C# app uses a taskbar-owned tool window in the requested position. The user confirmed it stays out of Alt+Tab. Direct painting fixed intermittent dot-only rendering; Windows can still temporarily cover the timer with another topmost surface. |
 | Q31 | How should popup countdowns sort? The initial proposal was warm tasks first, soonest deadline first, then recently expired cold tasks. | Warmest at the bottom. This also aligns with Q26's time-based order across recent sessions. |
 | Q32 | What time should a cold row show: `Cold · 42m ago` measured from estimated deadline or frozen `00:00`? | The relative cold time sounds good. |

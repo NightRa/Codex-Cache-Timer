@@ -6,6 +6,7 @@ namespace CodexCacheTimer;
 internal sealed class TimerSettings
 {
     public int RecentHours { get; set; } = 3;
+    public string? PreferredSessionId { get; set; }
 
     public static string PathOnDisk => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

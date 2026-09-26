@@ -16,7 +16,7 @@ Click the timer to see the recent tasks. Click a row to open that Codex task, or
 
 The app requires Windows and the .NET 10 desktop runtime. It reads `%CODEX_HOME%` if set, otherwise `%USERPROFILE%\.codex`. It reads session rollouts and `session_index.jsonl` without modifying them. Codex's background workers, including subagents and auto-review, are excluded; user-created forks have their own rows.
 
-Settings live in `%LOCALAPPDATA%\CodexCacheTimer\settings.json`. The only setting is `RecentHours`, initially `3`. Restart the app after editing the file. Pin choice is intentionally not saved.
+Settings live in `%LOCALAPPDATA%\CodexCacheTimer\settings.json`. `RecentHours` controls how long tasks remain in the popup and defaults to `3`. Restart the app after editing the file. The preferred task is saved and restored on launch while it remains in that recent window; the app clears the saved pin once the task is no longer shown.
 
 Diagnostic logs are written to `%LOCALAPPDATA%\CodexCacheTimer\logs\cache-timer-YYYY-MM-DD.log`. They record selected task IDs, timer state, window ownership/visibility/position, popup layout, scan results, and exceptions. They do not record prompt contents or task titles.
 
