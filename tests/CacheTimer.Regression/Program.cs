@@ -82,7 +82,7 @@ internal static class Program
             {
                 Id = $"many-{index}", Title = $"Task {index}", Anchor = now.AddMinutes(index)
             }).ToArray();
-            // WinForms computes real scroll ranges only for a visible control tree.
+            // Exercise scrolling with the real viewport layout of a visible popup.
             popup.Location = new Point(-32000, -32000);
             popup.Show();
             popup.SetSessions(many, settings, null, now);
@@ -99,20 +99,21 @@ internal static class Program
                 "Adding a task must preserve scroll position and existing rows.");
             popup.SetSessions(many, settings, "many-19", now.AddSeconds(12));
             Application.DoEvents();
-            int maxScroll = Math.Max(0, rows.VerticalScroll.Maximum - rows.VerticalScroll.LargeChange + 1);
+            int maxScroll = popup.MaximumScroll;
             Check(maxScroll > 0, "Bottom-scroll regression must have vertical overflow.");
-            rows.AutoScrollPosition = new Point(0, maxScroll);
+            popup.ScrollListTo(maxScroll);
             Application.DoEvents();
 
-            Check(-rows.AutoScrollPosition.Y == maxScroll,
-                $"Bottom scroll must reach maximum offset (expected={maxScroll}, actual={-rows.AutoScrollPosition.Y}).");
+            Check(popup.ScrollOffset == maxScroll,
+                $"Bottom scroll must reach maximum offset (expected={maxScroll}, actual={popup.ScrollOffset}).");
             var pinnedLastRow = rows.Controls[rows.Controls.Count - 1];
             var pinnedFinalButton = pinnedLastRow.Controls.OfType<Button>().Single();
             Check(pinnedFinalButton.BackColor == Color.FromArgb(70, 80, 92),
                 "The final row must be the pinned row.");
-            Check(pinnedLastRow.Top >= rows.ClientRectangle.Top
-                && pinnedLastRow.Bottom <= rows.ClientRectangle.Bottom,
-                $"The pinned final row must be fully visible at the bottom (row={pinnedLastRow.Bounds}, viewport={rows.ClientRectangle}).");
+            var viewport = rows.Parent!.ClientRectangle;
+            Check(pinnedLastRow.Top + rows.Top >= viewport.Top
+                && pinnedLastRow.Bottom + rows.Top <= viewport.Bottom,
+                $"The pinned final row must be fully visible at the bottom (row={pinnedLastRow.Bounds}, offset={rows.Top}, viewport={viewport}).");
             Console.WriteLine("PASS: pinned final row is fully visible at maximum scroll.");
             Console.WriteLine("PASS: scrolled lists retain their position during scans and additions.");
             return 0;
