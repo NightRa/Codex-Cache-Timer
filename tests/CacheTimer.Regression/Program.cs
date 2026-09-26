@@ -94,6 +94,23 @@ internal static class Program
             popup.SetSessions(many.Append(second).ToArray(), settings, null, now.AddSeconds(8));
             Check(rows.AutoScrollPosition == scroll && retained.All(control => !control.IsDisposed),
                 "Adding a task must preserve scroll position and existing rows.");
+            popup.SetSessions(many, settings, "many-19", now.AddSeconds(12));
+            Application.DoEvents();
+            int maxScroll = Math.Max(0, rows.VerticalScroll.Maximum - rows.VerticalScroll.LargeChange + 1);
+            Check(maxScroll > 0, "Bottom-scroll regression must have vertical overflow.");
+            rows.AutoScrollPosition = new Point(0, maxScroll);
+            Application.DoEvents();
+
+            Check(-rows.AutoScrollPosition.Y == maxScroll,
+                $"Bottom scroll must reach maximum offset (expected={maxScroll}, actual={-rows.AutoScrollPosition.Y}).");
+            var pinnedLastRow = rows.Controls[rows.Controls.Count - 1];
+            var pinnedFinalButton = pinnedLastRow.Controls.OfType<Button>().Single();
+            Check(pinnedFinalButton.BackColor == Color.FromArgb(70, 80, 92),
+                "The final row must be the pinned row.");
+            Check(pinnedLastRow.Top >= rows.ClientRectangle.Top
+                && pinnedLastRow.Bottom <= rows.ClientRectangle.Bottom,
+                $"The pinned final row must be fully visible at the bottom (row={pinnedLastRow.Bounds}, viewport={rows.ClientRectangle}).");
+            Console.WriteLine("PASS: pinned final row is fully visible at maximum scroll.");
             Console.WriteLine("PASS: scrolled lists retain their position during scans and additions.");
             return 0;
         }
