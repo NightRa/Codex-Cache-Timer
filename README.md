@@ -43,4 +43,19 @@ dotnet run --project .\tests\CacheTimer.Regression\CacheTimer.Regression.csproj
 
 The checks exercise actual WinForms controls: rendered title alignment across short and ellipsized text, long time-label fit, row and handle retention across scans, live status updates, sorting, task additions/removals, empty lists, and scroll preservation. The scroll check briefly shows the test popup offscreen.
 
+## CI and releases
+
+[Build and release](https://github.com/NightRa/Codex-Cache-Timer/actions/workflows/build-release.yml) runs the Windows regression checks and publishes a Windows x64 build for relevant pull requests and changes to `main`. Push a version tag to build, test, and publish a GitHub release with generated release notes, a ZIP, and its SHA-256 checksum:
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Tags must use `vMAJOR.MINOR.PATCH`, optionally followed by a prerelease suffix such as `-rc.1`. Prerelease tags create GitHub prereleases without replacing the latest stable release. Extract the ZIP and run `CodexCacheTimer/CodexCacheTimer.exe`; the .NET 10 desktop runtime is required.
+
+For a build without publishing, run the workflow manually and leave `draft_tag` empty. Its ZIP and checksum are available as a workflow artifact for one day. To prepare or validate a release, supply a version in `draft_tag`; the workflow creates a draft release from the selected revision. Review and publish that draft in GitHub instead of pushing the same tag again. Existing releases are never overwritten; rerunning a release creation for an existing tag fails.
+
+CI uses one standard Windows job because the regression checks need WinForms. It avoids a runner matrix, duplicate push checks on PR branches, and dependency caches (there are no third-party packages). Path filters skip documentation-only changes; tag pushes always run. Superseded branch/PR checks are cancelled, release runs are protected from cancellation, and only manual builds use temporary artifact storage. Release assets are uploaded directly without storing a second copy as Actions artifacts. Standard hosted runners are free for this public repository; these choices also reduce minutes and storage if it becomes private.
+
 Design decisions and the Q1–Q35 record are in [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md).

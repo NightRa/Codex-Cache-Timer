@@ -1,0 +1,112 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/build-release.yml'
+      - 'global.json'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - '.github/workflows/build-release.yml'
+      - 'global.json'
+  workflow_dispatch:
+    inputs:
+      draft_tag:
+        description: 'Optional version tag (e.g. v1.0.0) to create a draft release; empty = build only'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Superseded checks can stop, but publishing must finish uninterrupted.
+concurrency:
+  group: build-release-${{ inputs.draft_tag || github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch') }}
+
+defaults:
+  run:
+    shell: pwsh
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: write # Release API; PRs from forks receive a read-only token.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve release version
+        id: version
+        env:
+          DRAFT_TAG: ${{ inputs.draft_tag }}
+        run: |
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { $env:DRAFT_TAG }
+          if ($tag -and $tag -cnotmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
+            throw "Expected a version tag such as v1.0.0 or v1.0.0-rc.1; got '$tag'."
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Run Windows regression checks
+        run: dotnet run --project tests/CacheTimer.Regression/CacheTimer.Regression.csproj --configuration Release
+
+      - name: Publish Windows x64 app
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $versionArgs = @()
+          if ($env:RELEASE_TAG) { $versionArgs += "-p:Version=$($env:RELEASE_TAG.Substring(1))" }
+          dotnet publish src/CacheTimer/CacheTimer.csproj --configuration Release --runtime win-x64 --self-contained false --output dist/CodexCacheTimer -p:DebugType=None -p:DebugSymbols=false @versionArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $suffix = if ($env:RELEASE_TAG) { $env:RELEASE_TAG } else { $env:GITHUB_SHA.Substring(0, 7) }
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          $archive = "artifacts/CodexCacheTimer-$suffix-win-x64.zip"
+          Compress-Archive -Path dist/CodexCacheTimer -DestinationPath $archive
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($archive))" | Set-Content "$archive.sha256" -Encoding utf8NoBOM
+
+      # Releases keep their own assets; routine CI does not consume artifact storage.
+      - name: Upload manual build
+        if: github.event_name == 'workflow_dispatch' && steps.version.outputs.tag == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CodexCacheTimer-win-x64
+          path: artifacts/*
+          if-no-files-found: error
+          compression-level: 0 # The package is already a ZIP.
+          retention-days: 1
+
+      - name: Create GitHub release
+        if: steps.version.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $assets = @(Get-ChildItem artifacts -File | ForEach-Object { $_.FullName })
+          $releaseArgs = @('--title', "Codex Cache Timer $env:RELEASE_TAG", '--generate-notes')
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            $releaseArgs += @('--draft', '--target', $env:GITHUB_SHA)
+          } else {
+            $releaseArgs += '--verify-tag'
+          }
+          if ($env:RELEASE_TAG.Contains('-')) { $releaseArgs += @('--prerelease', '--latest=false') }
+          gh release create $env:RELEASE_TAG @assets @releaseArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
